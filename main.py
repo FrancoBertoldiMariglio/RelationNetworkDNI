@@ -80,6 +80,11 @@ def main(valid_dir, invalid_dir, epochs, episodes_per_epoch, n_shot, n_query, le
     ])
     dataset = BinaryImageDataset(valid_dir, invalid_dir, transform)
 
+    # Check if there are enough samples in the dataset
+    total_len = len(dataset)
+    if n_shot * 2 > total_len or n_query * 2 > total_len:
+        raise ValueError("Not enough samples in the dataset for the specified n_shot and n_query values")
+
     # Training loop
     print("Training...")
     for epoch in range(epochs):
@@ -149,10 +154,6 @@ def main(valid_dir, invalid_dir, epochs, episodes_per_epoch, n_shot, n_query, le
 def sample_episode(dataset, n_shot, n_query, device):
     """Sample support and query sets for an episode"""
     total_len = len(dataset)
-
-    # Check if there are enough samples in the dataset
-    if n_shot * 2 > total_len or n_query * 2 > total_len:
-        raise ValueError("Not enough samples in the dataset for the specified n_shot and n_query values")
 
     # Sample support and query sets
     support_indices = random.sample(range(total_len), min(n_shot * 2, total_len))
