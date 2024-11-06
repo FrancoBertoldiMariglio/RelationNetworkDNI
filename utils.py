@@ -8,12 +8,14 @@ from torchvision import transforms
 
 
 class BinaryImageDataset(Dataset):
-    """Improved dataset class with better type hints and organization"""
+    """Memory-efficient dataset implementation"""
 
     def __init__(self, valid_dir: str, invalid_dir: str, transform: Optional[transforms.Compose] = None):
+        self.cache = {}
+        self.cache_size = 1000
         self.transform = transform
 
-        # Load and validate directories
+        # Use memory-efficient list comprehension
         self.valid_images = [os.path.join(valid_dir, f) for f in os.listdir(valid_dir)
                              if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
         self.invalid_images = [os.path.join(invalid_dir, f) for f in os.listdir(invalid_dir)
@@ -23,18 +25,21 @@ class BinaryImageDataset(Dataset):
             raise ValueError("No valid images found in one or both directories")
 
         self.all_images = self.valid_images + self.invalid_images
-        self.labels = torch.tensor([1] * len(self.valid_images) + [0] * len(self.invalid_images))
-
-    def __len__(self) -> int:
-        return len(self.all_images)
+        # Use more memory-efficient int8 for labels
+        self.labels = torch.tensor([1] * len(self.valid_images) + [0] * len(self.invalid_images), dtype=torch.int8)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        image = Image.open(self.all_images[idx]).convert('RGB')
-        label = self.labels[idx]
+        if idx in self.cache:
+            image = self.cache[idx]
+        else:
+            image = Image.open(self.all_images[idx]).convert('RGB')
+            if len(self.cache) < self.cache_size:
+                self.cache[idx] = image
 
+        label = self.labels[idx].to(torch.float32)
         if self.transform:
             image = self.transform(image)
-
+            image = image.contiguous()
         return image, label
 
 

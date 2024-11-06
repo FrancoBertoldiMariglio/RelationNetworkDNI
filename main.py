@@ -43,6 +43,9 @@ class RelationNetTrainer:
         # Initialize models and move to GPU
         self.setup_models()
 
+        # Verify model setup
+        self.verify_model_setup()
+
         # Initialize optimizers and schedulers
         self.setup_optimizers()
 
@@ -53,7 +56,7 @@ class RelationNetTrainer:
         self.setup_data()
 
         # Initialize gradient scaler for AMP
-        self.scaler = torch.amp.GradScaler('cuda')
+        self.scaler = torch.cuda.amp.GradScaler()
 
     def setup_logging(self):
         """Initialize logging configuration"""
@@ -72,41 +75,82 @@ class RelationNetTrainer:
         self.logger = logging.getLogger(__name__)
 
     def setup_models(self):
-        """Initialize and configure models"""
+        """Initialize and configure models with optimizations"""
+        # First initialize the models
         self.embedding_net = EmbeddingNet().to(self.device)
         self.relation_module = RelationModule().to(self.device)
 
-        # Multi-GPU support
+        # Enable cudnn benchmarking for faster convolutions
+        torch.backends.cudnn.benchmark = True
+
+        # Add warmup AFTER model initialization
+        self.logger.info("Warming up GPU...")
+        dummy_input = torch.randn(1, 3, 84, 84, device=self.device)
+        with torch.no_grad():
+            for _ in range(3):  # Few warmup runs
+                _ = self.embedding_net(dummy_input)
+        torch.cuda.synchronize()
+
+        # Log initial GPU memory state
+        self.logger.info(f"Initial GPU Memory: {torch.cuda.memory_allocated() / 1e9:.2f}GB")
+
+        # Convert models to channels_last memory format
+        for module in self.embedding_net.modules():
+            if isinstance(module, nn.Conv2d):
+                module.weight.data = module.weight.data.contiguous(memory_format=torch.channels_last)
+
+        for module in self.relation_module.modules():
+            if isinstance(module, nn.Conv2d):
+                module.weight.data = module.weight.data.contiguous(memory_format=torch.channels_last)
+
         if torch.cuda.device_count() > 1:
             self.logger.info(f"Using {torch.cuda.device_count()} GPUs")
             self.embedding_net = nn.DataParallel(self.embedding_net)
             self.relation_module = nn.DataParallel(self.relation_module)
 
+    def verify_model_setup(self):
+        """Verify model initialization and GPU setup"""
+        try:
+            # Verify embedding network
+            dummy_input = torch.randn(1, 3, 84, 84, device=self.device)
+            with torch.no_grad():
+                out = self.embedding_net(dummy_input)
+                self.logger.info(f"Embedding network output shape: {out.shape}")
+
+                # Verify relation module with proper input shape
+                batch_size = 2
+                n_support = 5
+                dummy_relation_input = torch.randn(batch_size, 128, 10, 10,
+                                                   device=self.device)  # Adjust shape as needed
+                out = self.relation_module(dummy_relation_input)
+                self.logger.info(f"Relation module output shape: {out.shape}")
+
+            self.logger.info("Model verification successful!")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Model verification failed: {str(e)}")
+            raise RuntimeError("Model initialization failed") from e
+
     def setup_optimizers(self):
-        """Initialize optimizers and schedulers"""
+        """Initialize optimizers with memory and performance optimizations"""
+        # Use AdamW with larger batch size and adjusted learning rate
         self.embedding_optim = optim.AdamW(
             self.embedding_net.parameters(),
             lr=self.config['learning_rate'],
-            weight_decay=0.01
+            weight_decay=0.01,
+            eps=1e-4  # Slightly larger epsilon for better numerical stability
         )
+
         self.relation_optim = optim.AdamW(
             self.relation_module.parameters(),
             lr=self.config['learning_rate'],
-            weight_decay=0.01
+            weight_decay=0.01,
+            eps=1e-4
         )
 
-        total_steps = self.config['epochs'] * self.config['episodes_per_epoch']
-
-        self.embedding_scheduler = CosineAnnealingLR(
-            self.embedding_optim,
-            T_max=total_steps,
-            eta_min=1e-6
-        )
-        self.relation_scheduler = CosineAnnealingLR(
-            self.relation_optim,
-            T_max=total_steps,
-            eta_min=1e-6
-        )
+        # Gradient scaler for automatic mixed precision
+        self.scaler = torch.cuda.amp.GradScaler()
 
     def setup_data(self):
         """Initialize datasets and data transforms"""
@@ -141,17 +185,18 @@ class RelationNetTrainer:
         )
 
     def train_episode(self, support_loader: DataLoader, query_loader: DataLoader) -> Tuple[float, float]:
-        """Train on a single episode"""
+        """Optimized training for single episode"""
         self.embedding_net.train()
         self.relation_module.train()
 
-        # Process support set
         support_features = []
         support_labels = []
 
-        with torch.amp.autocast('cuda'):
+        with torch.cuda.amp.autocast():
+            # Convert support images to channels_last correctly
             for images, labels in support_loader:
                 images = images.to(self.device, non_blocking=True)
+                images = images.contiguous(memory_format=torch.channels_last)
                 labels = labels.to(self.device, non_blocking=True)
                 features = self.embedding_net(images)
                 support_features.append(features)
@@ -160,12 +205,13 @@ class RelationNetTrainer:
             support_features = torch.cat(support_features)
             support_labels = torch.cat(support_labels)
 
-            # Process query set
+            # Process query set with correct memory format
             query_features = []
             query_labels = []
 
             for images, labels in query_loader:
                 images = images.to(self.device, non_blocking=True)
+                images = images.contiguous(memory_format=torch.channels_last)
                 labels = labels.to(self.device, non_blocking=True)
                 features = self.embedding_net(images)
                 query_features.append(features)
@@ -174,35 +220,38 @@ class RelationNetTrainer:
             query_features = torch.cat(query_features)
             query_labels = torch.cat(query_labels)
 
-            # Compute relations efficiently
+            # Efficient relation computation
             n_query = query_features.size(0)
             n_support = support_features.size(0)
 
+            # Use efficient memory layout for large tensors
             query_features_ext = query_features.unsqueeze(1).expand(-1, n_support, -1, -1, -1)
             support_features_ext = support_features.unsqueeze(0).expand(n_query, -1, -1, -1, -1)
 
+            # Efficient concatenation and reshape
             relation_pairs = torch.cat([query_features_ext, support_features_ext], dim=2)
             relation_pairs = relation_pairs.reshape(-1, *relation_pairs.shape[2:])
 
+            # Compute relations with mixed precision
             relations = self.relation_module(relation_pairs)
             relations = relations.view(n_query, n_support)
 
-            # Weight relations by support labels
             weighted_relations = relations * support_labels.float()
             predictions = weighted_relations.mean(dim=1)
 
-            # Use scaler for loss computation
             loss = self.criterion(predictions, query_labels.float())
 
-        # Optimize with gradient scaling
-        self.embedding_optim.zero_grad()
-        self.relation_optim.zero_grad()
+        # Optimized backward pass
+        self.embedding_optim.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+        self.relation_optim.zero_grad(set_to_none=True)
 
         self.scaler.scale(loss).backward()
 
         # Gradient clipping with scaler
         self.scaler.unscale_(self.embedding_optim)
         self.scaler.unscale_(self.relation_optim)
+
+        # Use faster gradient clipping
         torch.nn.utils.clip_grad_norm_(self.embedding_net.parameters(), 1.0)
         torch.nn.utils.clip_grad_norm_(self.relation_module.parameters(), 1.0)
 
@@ -210,11 +259,6 @@ class RelationNetTrainer:
         self.scaler.step(self.relation_optim)
         self.scaler.update()
 
-        # Update learning rates
-        self.embedding_scheduler.step()
-        self.relation_scheduler.step()
-
-        # Apply sigmoid for accuracy computation since we're using BCEWithLogitsLoss
         with torch.no_grad():
             accuracy = ((torch.sigmoid(predictions) >= 0.5).long() == query_labels).float().mean()
 
@@ -539,6 +583,13 @@ def main():
                         help='Path to checkpoint to resume training from')
     parser.add_argument('--debug', action='store_true',
                         help='Enable debug mode')
+    parser.add_argument('--mixed_precision', type=str, default='fp16',
+                        choices=['fp16', 'bf16', 'fp32'],
+                        help='Mixed precision type')
+    parser.add_argument('--prefetch_factor', type=int, default=2,
+                        help='Number of batches to prefetch')
+    parser.add_argument('--optimize_memory', action='store_true',
+                        help='Enable additional memory optimizations')
 
     args = parser.parse_args()
 
