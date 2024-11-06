@@ -1,0 +1,77 @@
+2024-11-06 11:43:51,344 - INFO - Configuration:
+2024-11-06 11:43:51,344 - INFO - valid_dir: data/valid
+2024-11-06 11:43:51,344 - INFO - invalid_dir: data/invalid
+2024-11-06 11:43:51,344 - INFO - test_dir_valid: data/test/valid
+2024-11-06 11:43:51,344 - INFO - test_dir_invalid: data/test/invalid
+2024-11-06 11:43:51,344 - INFO - epochs: 100
+2024-11-06 11:43:51,344 - INFO - episodes_per_epoch: 200
+2024-11-06 11:43:51,344 - INFO - n_shot: 5
+2024-11-06 11:43:51,344 - INFO - n_query: 15
+2024-11-06 11:43:51,344 - INFO - learning_rate: 0.001
+2024-11-06 11:43:51,344 - INFO - batch_size: 32
+2024-11-06 11:43:51,344 - INFO - num_workers: 4
+2024-11-06 11:43:51,344 - INFO - save_interval: 5
+2024-11-06 11:43:51,344 - INFO - hidden_size: 8
+2024-11-06 11:43:51,344 - INFO - dropout: 0.1
+2024-11-06 11:43:51,344 - INFO - device: cuda
+2024-11-06 11:43:51,344 - INFO - seed: 42
+2024-11-06 11:43:51,344 - INFO - resume: None
+2024-11-06 11:43:51,344 - INFO - debug: False
+2024-11-06 11:43:51,344 - INFO - 
+Model Architecture:
+2024-11-06 11:43:51,344 - INFO - 
+Embedding Network:
+2024-11-06 11:43:51,344 - INFO - EmbeddingNet(
+  (encoder): Sequential(
+    (0): ConvBlock(
+      (conv): Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1))
+      (bn): BatchNorm2d(64, eps=1e-05, momentum=1, affine=True, track_running_stats=True)
+      (relu): ReLU()
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+    (1): ConvBlock(
+      (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1))
+      (bn): BatchNorm2d(64, eps=1e-05, momentum=1, affine=True, track_running_stats=True)
+      (relu): ReLU()
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+    (2): ConvBlock(
+      (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (bn): BatchNorm2d(64, eps=1e-05, momentum=1, affine=True, track_running_stats=True)
+      (relu): ReLU()
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+    (3): ConvBlock(
+      (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (bn): BatchNorm2d(64, eps=1e-05, momentum=1, affine=True, track_running_stats=True)
+      (relu): ReLU()
+      (pool): Identity()
+    )
+  )
+)
+2024-11-06 11:43:51,344 - INFO - 
+Relation Module:
+2024-11-06 11:43:51,344 - INFO - RelationModule(
+  (conv_net): Sequential(
+    (0): ConvBlock(
+      (conv): Conv2d(128, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (bn): BatchNorm2d(64, eps=1e-05, momentum=1, affine=True, track_running_stats=True)
+      (relu): ReLU()
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+    (1): ConvBlock(
+      (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (bn): BatchNorm2d(64, eps=1e-05, momentum=1, affine=True, track_running_stats=True)
+      (relu): ReLU()
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+  )
+  (classifier): Sequential(
+    (0): Linear(in_features=256, out_features=8, bias=True)
+    (1): ReLU()
+    (2): Linear(in_features=8, out_features=1, bias=True)
+  )
+)
+2024-11-06 11:43:51,345 - INFO - Starting training...
+2024-11-06 11:44:09,031 - INFO - Training interrupted by user
+2024-11-06 11:44:09,053 - INFO - Saving final checkpoint...

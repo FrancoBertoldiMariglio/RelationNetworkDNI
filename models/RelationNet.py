@@ -1,76 +1,61 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
-import torchvision.transforms as transforms
+
+
+class ConvBlock(nn.Module):
+    """Basic convolutional block with batch normalization and ReLU"""
+
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=0, pool=True):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, padding=padding)
+        self.bn = nn.BatchNorm2d(out_channels, momentum=1, affine=True)
+        self.relu = nn.ReLU()
+        self.pool = nn.MaxPool2d(2) if pool else nn.Identity()
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.relu(x)
+        x = self.pool(x)
+        return x
 
 
 class EmbeddingNet(nn.Module):
-    """CNN for feature extraction from 84x84 images with 3 channels"""
+    """Improved CNN for feature extraction"""
 
     def __init__(self):
-        super(EmbeddingNet, self).__init__()
+        super().__init__()
 
-        # Define each layer sequentially without overwriting
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, padding=0),
-            nn.BatchNorm2d(64, momentum=1, affine=True),
-            nn.ReLU(),
-            nn.MaxPool2d(2)  # Output: 64 x 41 x 41
-        )
-
-        self.layer2 = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, padding=0),
-            nn.BatchNorm2d(64, momentum=1, affine=True),
-            nn.ReLU(),
-            nn.MaxPool2d(2)  # Output: 64 x 20 x 20
-        )
-
-        self.layer3 = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64, momentum=1, affine=True),
-            nn.ReLU(),
-            nn.MaxPool2d(2)  # Output: 64 x 10 x 10
-        )
-
-        self.layer4 = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64, momentum=1, affine=True),
-            nn.ReLU()  # Output: 64 x 10 x 10
+        self.encoder = nn.Sequential(
+            ConvBlock(3, 64, padding=0, pool=True),  # Output: 64 x 41 x 41
+            ConvBlock(64, 64, padding=0, pool=True),  # Output: 64 x 20 x 20
+            ConvBlock(64, 64, padding=1, pool=True),  # Output: 64 x 10 x 10
+            ConvBlock(64, 64, padding=1, pool=False)  # Output: 64 x 10 x 10
         )
 
     def forward(self, x):
-        # Pass through each layer sequentially
-        out = self.layer1(x)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        return out
+        return self.encoder(x)
 
 
 class RelationModule(nn.Module):
-    """Module to compute relations between query and support examples"""
+    """Improved relation computation module"""
 
     def __init__(self, input_size=256, hidden_size=8):
-        super(RelationModule, self).__init__()
+        super().__init__()
 
-        self.layer1 = nn.Sequential(
-                        nn.Conv2d(128,64,kernel_size=3,padding=1),
-                        nn.BatchNorm2d(64, momentum=1, affine=True),
-                        nn.ReLU(),
-                        nn.MaxPool2d(2))
-        self.layer2 = nn.Sequential(
-                        nn.Conv2d(64,64,kernel_size=3,padding=1),
-                        nn.BatchNorm2d(64, momentum=1, affine=True),
-                        nn.ReLU(),
-                        nn.MaxPool2d(2))
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size,1)
+        self.conv_net = nn.Sequential(
+            ConvBlock(128, 64, padding=1, pool=True),
+            ConvBlock(64, 64, padding=1, pool=True)
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, 1),
+        )
 
     def forward(self, x):
-        out = self.layer1(x)
-        out = self.layer2(out)
-        out = out.view(out.size(0),-1)
-        out = F.relu(self.fc1(out))
-        out = F.sigmoid(self.fc2(out))
-        return out
+        x = self.conv_net(x)
+        x = torch.flatten(x, 1)  # Flatten features
+        return self.classifier(x)
