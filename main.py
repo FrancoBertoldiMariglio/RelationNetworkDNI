@@ -1,4 +1,5 @@
 import argparse
+import gc
 import json
 from pathlib import Path
 from datetime import datetime
@@ -68,8 +69,13 @@ def setup_models() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available. This implementation requires GPU.")
 
+    torch.cuda.empty_cache()
+
     embedding_net = EmbeddingNet().to(device)
     relation_module = RelationModule().to(device)
+
+    assert next(embedding_net.parameters()).is_cuda
+    assert next(relation_module.parameters()).is_cuda
 
 
 def setup_optimizers() -> None:
@@ -130,15 +136,19 @@ def train_episode(support_loader: DataLoader, query_loader: DataLoader) -> Tuple
     embedding_net.train()
     relation_module.train()
 
+    assert next(embedding_net.parameters()).is_cuda, "embedding_net not on CUDA"
+    assert next(relation_module.parameters()).is_cuda, "relation_module not on CUDA"
+
     support_features: List[Tensor] = []
     support_labels: List[Tensor] = []
 
     with autocast('cuda'):
+        torch.cuda.synchronize()
         for images, labels in support_loader:
             if not images.is_cuda:
-                images = images.to(device)
+                images = images.to(device, non_blocking=True)
             if not labels.is_cuda:
-                labels = labels.to(device)
+                labels = labels.to(device, non_blocking=True)
 
             features = embedding_net(images)
             support_features.append(features)
@@ -152,9 +162,9 @@ def train_episode(support_loader: DataLoader, query_loader: DataLoader) -> Tuple
 
         for images, labels in query_loader:
             if not images.is_cuda:
-                images = images.to(device)
+                images = images.to(device, non_blocking=True)
             if not labels.is_cuda:
-                labels = labels.to(device)
+                labels = labels.to(device, non_blocking=True)
 
             features = embedding_net(images)
             query_features.append(features)
@@ -198,7 +208,102 @@ def train_episode(support_loader: DataLoader, query_loader: DataLoader) -> Tuple
     with torch.no_grad():
         accuracy = ((torch.sigmoid(predictions) >= 0.5).long() == query_labels).float().mean()
 
+    torch.cuda.synchronize()
+
     return loss.item(), accuracy.item()
+
+def train() -> None:
+    """Main training loop"""
+    global best_val_loss
+
+    episode_sampler = EpisodeSampler(
+        train_dataset,
+        config['n_shot'],
+        config['n_query']
+    )
+
+    early_stopping_counter = 0
+    early_stopping_patience = 10
+
+    logger.info("Starting training...")
+    for epoch in range(config['epochs']):
+        epoch_loss: float = 0.0
+        epoch_accuracy: float = 0.0
+
+        progress_bar = tqdm(range(config['episodes_per_epoch']),
+                            desc=f"Epoch {epoch + 1}")
+
+        for _ in progress_bar:
+            torch.cuda.empty_cache()
+            gc.collect()
+
+            support_indices, query_indices = episode_sampler.sample_episode()
+
+            support_loader = DataLoader(
+                Subset(train_dataset, support_indices),
+                batch_size=config['batch_size'],
+                shuffle=True,
+                num_workers=config['num_workers'],
+                pin_memory=True,
+                persistent_workers=True,
+                prefetch_factor=config['prefetch_factor']
+            )
+            query_loader = DataLoader(
+                Subset(train_dataset, query_indices),
+                batch_size=config['batch_size'],
+                shuffle=True,
+                num_workers=config['num_workers'],
+                pin_memory=True,
+                persistent_workers=True,
+                prefetch_factor=config['prefetch_factor']
+            )
+
+            loss, accuracy = train_episode(support_loader, query_loader)
+
+            epoch_loss += loss
+            epoch_accuracy += accuracy
+
+            progress_bar.set_postfix({
+                'loss': f'{loss:.4f}',
+                'acc': f'{accuracy:.4f}'
+            })
+
+            del loss, accuracy
+            torch.cuda.synchronize()
+
+        epoch_loss /= config['episodes_per_epoch']
+        epoch_accuracy /= config['episodes_per_epoch']
+
+        val_metrics = evaluate()
+
+        logger.info(
+            f"Epoch [{epoch + 1}/{config['epochs']}] "
+            f"Train Loss: {epoch_loss:.4f} "
+            f"Train Acc: {epoch_accuracy:.4f} "
+            f"Val Loss: {val_metrics['loss']:.4f} "
+            f"Val Acc: {val_metrics['accuracy']:.4f} "
+            f"Val F1: {val_metrics['f1']:.4f}"
+        )
+
+        if val_metrics['loss'] < best_val_loss:
+            best_val_loss = val_metrics['loss']
+            save_checkpoint(epoch, val_metrics, is_best=True)
+            early_stopping_counter = 0
+            logger.info("New best model saved!")
+        else:
+            early_stopping_counter += 1
+
+        if (epoch + 1) % config['save_interval'] == 0:
+            save_checkpoint(epoch, val_metrics)
+
+        if early_stopping_counter >= early_stopping_patience:
+            logger.info("Early stopping triggered!")
+            break
+
+        if (epoch + 1) % 5 == 0:
+            torch.cuda.empty_cache()
+
+    logger.info("Training completed!")
 
 
 def _evaluate_episode(support_loader: DataLoader, query_loader: DataLoader) -> Tuple[float, List[int], List[int]]:
@@ -215,9 +320,9 @@ def _evaluate_episode(support_loader: DataLoader, query_loader: DataLoader) -> T
 
         for images, labels in support_loader:
             if not images.is_cuda:
-                images = images.to(device)
+                images = images.to(device, non_blocking=True)
             if not labels.is_cuda:
-                labels = labels.to(device)
+                labels = labels.to(device, non_blocking=True)
 
             features = embedding_net(images)
             support_features.append(features)
@@ -231,9 +336,9 @@ def _evaluate_episode(support_loader: DataLoader, query_loader: DataLoader) -> T
 
         for images, labels in query_loader:
             if not images.is_cuda:
-                images = images.to(device)
+                images = images.to(device, non_blocking=True)
             if not labels.is_cuda:
-                labels = labels.to(device)
+                labels = labels.to(device, non_blocking=True)
 
             features = embedding_net(images)
             query_features.append(features)
@@ -363,95 +468,6 @@ def load_checkpoint(checkpoint_path: str) -> int:
     return checkpoint['epoch']
 
 
-def train() -> None:
-    """Main training loop"""
-    global best_val_loss
-
-    episode_sampler = EpisodeSampler(
-        train_dataset,
-        config['n_shot'],
-        config['n_query']
-    )
-
-    early_stopping_counter = 0
-    early_stopping_patience = 10
-
-    logger.info("Starting training...")
-    for epoch in range(config['epochs']):
-        epoch_loss: float = 0.0
-        epoch_accuracy: float = 0.0
-
-        progress_bar = tqdm(range(config['episodes_per_epoch']),
-                            desc=f"Epoch {epoch + 1}")
-
-        for _ in progress_bar:
-            support_indices, query_indices = episode_sampler.sample_episode()
-
-            support_loader = DataLoader(
-                Subset(train_dataset, support_indices),
-                batch_size=config['batch_size'],
-                shuffle=True,
-                num_workers=config['num_workers'],
-                pin_memory=True,
-                persistent_workers=True,
-                prefetch_factor=config['prefetch_factor']
-            )
-            query_loader = DataLoader(
-                Subset(train_dataset, query_indices),
-                batch_size=config['batch_size'],
-                shuffle=True,
-                num_workers=config['num_workers'],
-                pin_memory=True,
-                persistent_workers=True,
-                prefetch_factor=config['prefetch_factor']
-            )
-
-            loss, accuracy = train_episode(support_loader, query_loader)
-
-            epoch_loss += loss
-            epoch_accuracy += accuracy
-
-            progress_bar.set_postfix({
-                'loss': f'{loss:.4f}',
-                'acc': f'{accuracy:.4f}'
-            })
-
-            torch.cuda.synchronize()
-
-        epoch_loss /= config['episodes_per_epoch']
-        epoch_accuracy /= config['episodes_per_epoch']
-
-        val_metrics = evaluate()
-
-        logger.info(
-            f"Epoch [{epoch + 1}/{config['epochs']}] "
-            f"Train Loss: {epoch_loss:.4f} "
-            f"Train Acc: {epoch_accuracy:.4f} "
-            f"Val Loss: {val_metrics['loss']:.4f} "
-            f"Val Acc: {val_metrics['accuracy']:.4f} "
-            f"Val F1: {val_metrics['f1']:.4f}"
-        )
-
-        if val_metrics['loss'] < best_val_loss:
-            best_val_loss = val_metrics['loss']
-            save_checkpoint(epoch, val_metrics, is_best=True)
-            early_stopping_counter = 0
-            logger.info("New best model saved!")
-        else:
-            early_stopping_counter += 1
-
-        if (epoch + 1) % config['save_interval'] == 0:
-            save_checkpoint(epoch, val_metrics)
-
-        if early_stopping_counter >= early_stopping_patience:
-            logger.info("Early stopping triggered!")
-            break
-
-        if (epoch + 1) % 5 == 0:
-            torch.cuda.empty_cache()
-
-    logger.info("Training completed!")
-
 def main() -> None:
     """Main function to setup and run training"""
     global config
@@ -514,6 +530,7 @@ def main() -> None:
     # Enable CUDA optimizations
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
+    torch.cuda.empty_cache()
 
     # Setup config
     config = vars(args)
