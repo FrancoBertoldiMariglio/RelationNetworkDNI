@@ -1,0 +1,42 @@
+2024-11-08 14:31:19,382 - INFO - Initial GPU Memory: 0.00GB
+2024-11-08 14:31:19,382 - INFO - Starting training...
+2024-11-08 14:31:19,654 - ERROR - An error occurred during training
+Traceback (most recent call last):
+  File "/home/francobertoldi/Documents/RelationNetworkDNI/main.py", line 551, in main
+    train()
+  File "/home/francobertoldi/Documents/RelationNetworkDNI/main.py", line 261, in train
+    loss, accuracy = train_episode(support_loader, query_loader)
+  File "/home/francobertoldi/Documents/RelationNetworkDNI/main.py", line 147, in train_episode
+    for images, labels in support_loader:
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 701, in __next__
+    data = self._next_data()
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1465, in _next_data
+    return self._process_data(data)
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1491, in _process_data
+    data.reraise()
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/_utils.py", line 715, in reraise
+    raise exception
+RuntimeError: Caught RuntimeError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/home/francobertoldi/Documents/RelationNetworkDNI/utils.py", line 68, in __getitem__
+    image = image.contiguous().to('cuda', non_blocking=True)
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/cuda/__init__.py", line 305, in _lazy_init
+    raise RuntimeError(
+RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use the 'spawn' start method
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/_utils/worker.py", line 351, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py", line 50, in fetch
+    data = self.dataset.__getitems__(possibly_batched_index)
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/dataset.py", line 420, in __getitems__
+    return [self.dataset[self.indices[idx]] for idx in indices]
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/dataset.py", line 420, in <listcomp>
+    return [self.dataset[self.indices[idx]] for idx in indices]
+  File "/home/francobertoldi/Documents/RelationNetworkDNI/utils.py", line 70, in __getitem__
+    raise RuntimeError(f"Error transforming image {self.all_images[idx]}: {str(e)}")
+RuntimeError: Error transforming image data/train/invalid/invalid_image_119.jpg: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use the 'spawn' start method
+
+2024-11-08 14:31:19,655 - INFO - Saving final checkpoint...

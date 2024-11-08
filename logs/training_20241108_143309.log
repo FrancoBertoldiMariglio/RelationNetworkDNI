@@ -1,0 +1,29 @@
+2024-11-08 14:33:10,077 - INFO - Initial GPU Memory: 0.00GB
+2024-11-08 14:33:10,078 - INFO - Starting training...
+2024-11-08 14:33:12,266 - ERROR - An error occurred during training
+Traceback (most recent call last):
+  File "/home/francobertoldi/Documents/RelationNetworkDNI/main.py", line 555, in main
+    train()
+  File "/home/francobertoldi/Documents/RelationNetworkDNI/main.py", line 265, in train
+    loss, accuracy = train_episode(support_loader, query_loader)
+  File "/home/francobertoldi/Documents/RelationNetworkDNI/main.py", line 151, in train_episode
+    for images, labels in support_loader:
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 701, in __next__
+    data = self._next_data()
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1465, in _next_data
+    return self._process_data(data)
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1491, in _process_data
+    data.reraise()
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/_utils.py", line 715, in reraise
+    raise exception
+RuntimeError: Caught RuntimeError in pin memory thread for device 0.
+Original Traceback (most recent call last):
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/_utils/pin_memory.py", line 41, in do_one_step
+    data = pin_memory(data, device)
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/_utils/pin_memory.py", line 98, in pin_memory
+    clone[i] = pin_memory(item, device)
+  File "/home/francobertoldi/miniconda3/envs/cuda/lib/python3.10/site-packages/torch/utils/data/_utils/pin_memory.py", line 64, in pin_memory
+    return data.pin_memory(device)
+RuntimeError: cannot pin 'torch.cuda.FloatTensor' only dense CPU tensors can be pinned
+
+2024-11-08 14:33:12,267 - INFO - Saving final checkpoint...

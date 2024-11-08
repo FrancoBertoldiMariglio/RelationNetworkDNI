@@ -11,7 +11,7 @@ class BinaryImageDataset(Dataset):
     """
     Memory-efficient dataset implementation maintaining data on CPU until loaded by DataLoader
     """
-    def __init__(self, 
+    def __init__(self,
                  valid_dir: str, 
                  invalid_dir: str, 
                  transform: Optional[transforms.Compose] = None) -> None:
@@ -64,10 +64,11 @@ class BinaryImageDataset(Dataset):
         if self.transform:
             try:
                 image = self.transform(image)
-                # Ensure the transformed image is contiguous but on CPU
-                image = image.contiguous()
+                image = image.contiguous().to('cuda', non_blocking=True)
             except Exception as e:
                 raise RuntimeError(f"Error transforming image {self.all_images[idx]}: {str(e)}")
+
+        label = label.to('cuda', non_blocking=True)
         
         return image, label
 

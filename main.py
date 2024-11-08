@@ -12,6 +12,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Subset
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
+import torch.multiprocessing as mp
 from sklearn.metrics import precision_score, recall_score, f1_score
 import torchvision.transforms as transforms
 import logging
@@ -19,6 +20,9 @@ from tqdm import tqdm
 
 from models.RelationNet import EmbeddingNet, RelationModule
 from utils import BinaryImageDataset, EpisodeSampler
+
+# Configura el método de inicio en 'spawn' para evitar problemas de inicialización de CUDA
+mp.set_start_method('spawn', force=True)
 
 # Global variables
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -244,7 +248,6 @@ def train() -> None:
                 batch_size=config['batch_size'],
                 shuffle=True,
                 num_workers=config['num_workers'],
-                pin_memory=True,
                 persistent_workers=True,
                 prefetch_factor=config['prefetch_factor']
             )
@@ -253,7 +256,6 @@ def train() -> None:
                 batch_size=config['batch_size'],
                 shuffle=True,
                 num_workers=config['num_workers'],
-                pin_memory=True,
                 persistent_workers=True,
                 prefetch_factor=config['prefetch_factor']
             )
@@ -299,9 +301,6 @@ def train() -> None:
         if early_stopping_counter >= early_stopping_patience:
             logger.info("Early stopping triggered!")
             break
-
-        if (epoch + 1) % 5 == 0:
-            torch.cuda.empty_cache()
 
     logger.info("Training completed!")
 
