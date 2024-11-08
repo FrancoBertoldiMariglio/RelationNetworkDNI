@@ -1,542 +1,461 @@
 import argparse
 import json
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, Optional, Tuple, List, Any, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
+from torch import Tensor
 from torch.utils.data import DataLoader, Subset
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.amp import GradScaler, autocast
 from sklearn.metrics import precision_score, recall_score, f1_score
 import torchvision.transforms as transforms
-from typing import Tuple, Dict, Optional
 import logging
-from pathlib import Path
-from datetime import datetime
-from models.RelationNet import EmbeddingNet, RelationModule
 from tqdm import tqdm
 
+from models.RelationNet import EmbeddingNet, RelationModule
 from utils import BinaryImageDataset, EpisodeSampler
 
+# Global variables
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+config: Dict[str, Any] = {}
+best_val_loss: float = float('inf')
+
+# Model components
+embedding_net: Optional[EmbeddingNet] = None
+relation_module: Optional[RelationModule] = None
+embedding_optim: Optional[optim.AdamW] = None
+relation_optim: Optional[optim.AdamW] = None
+criterion: Optional[nn.BCEWithLogitsLoss] = None
+scaler: Optional[GradScaler] = None
+
+# Datasets and transforms
+train_dataset: Optional[BinaryImageDataset] = None
+val_dataset: Optional[BinaryImageDataset] = None
+train_transform: Optional[transforms.Compose] = None
+val_transform: Optional[transforms.Compose] = None
+
+# Logger
+logger = None
+
+
+def setup_logging() -> None:
+    """Initialize logging configuration"""
+    global logger
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_dir = Path('logs')
+    log_dir.mkdir(exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_dir / f'training_{timestamp}.log'),
+            logging.StreamHandler()
+        ]
+    )
+    logger = logging.getLogger(__name__)
+
+
+def setup_models() -> None:
+    """Initialize models directly on GPU"""
+    global embedding_net, relation_module
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available. This implementation requires GPU.")
+
+    embedding_net = EmbeddingNet().to(device)
+    relation_module = RelationModule().to(device)
+
+
+def setup_optimizers() -> None:
+    """Initialize optimizers with GPU support"""
+    global embedding_optim, relation_optim, criterion, scaler
+
+    embedding_optim = optim.AdamW(
+        embedding_net.parameters(),
+        lr=config['learning_rate'],
+        weight_decay=0.01
+    )
+
+    relation_optim = optim.AdamW(
+        relation_module.parameters(),
+        lr=config['learning_rate'],
+        weight_decay=0.01
+    )
 
-class RelationNetTrainer:
-    def __init__(self, config: Dict):
-        self.scaler = None
-        self.val_dataset = None
-        self.train_dataset = None
-        self.val_transform = None
-        self.train_transform = None
-        self.relation_scheduler = None
-        self.embedding_scheduler = None
-        self.relation_optim = None
-        self.embedding_optim = None
-        self.relation_module = None
-        self.embedding_net = None
-        self.logger = None
-        self.config = config
-        self.device = torch.device(config['device'])
-        self.best_val_loss = float('inf')
-
-        # Setup logging
-        self.setup_logging()
-
-        # Initialize models and move to GPU
-        self.setup_models()
-
-        # Verify model setup
-        self.verify_model_setup()
-
-        # Initialize optimizers and schedulers
-        self.setup_optimizers()
-
-        # Initialize criterion
-        self.criterion = nn.BCEWithLogitsLoss()
-
-        # Setup data
-        self.setup_data()
-
-        # Initialize gradient scaler for AMP
-        self.scaler = torch.cuda.amp.GradScaler()
-
-    def setup_logging(self):
-        """Initialize logging configuration"""
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_dir = Path('logs')
-        log_dir.mkdir(exist_ok=True)
-
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_dir / f'training_{timestamp}.log'),
-                logging.StreamHandler()
-            ]
-        )
-        self.logger = logging.getLogger(__name__)
-
-    def setup_models(self):
-        """Initialize and configure models with optimizations"""
-        # First initialize the models
-        self.embedding_net = EmbeddingNet().to(self.device)
-        self.relation_module = RelationModule().to(self.device)
-
-        # Enable cudnn benchmarking for faster convolutions
-        torch.backends.cudnn.benchmark = True
-
-        # Add warmup AFTER model initialization
-        self.logger.info("Warming up GPU...")
-        dummy_input = torch.randn(1, 3, 84, 84, device=self.device)
-        with torch.no_grad():
-            for _ in range(3):  # Few warmup runs
-                _ = self.embedding_net(dummy_input)
-        torch.cuda.synchronize()
-
-        # Log initial GPU memory state
-        self.logger.info(f"Initial GPU Memory: {torch.cuda.memory_allocated() / 1e9:.2f}GB")
-
-        # Convert models to channels_last memory format
-        for module in self.embedding_net.modules():
-            if isinstance(module, nn.Conv2d):
-                module.weight.data = module.weight.data.contiguous(memory_format=torch.channels_last)
-
-        for module in self.relation_module.modules():
-            if isinstance(module, nn.Conv2d):
-                module.weight.data = module.weight.data.contiguous(memory_format=torch.channels_last)
-
-        if torch.cuda.device_count() > 1:
-            self.logger.info(f"Using {torch.cuda.device_count()} GPUs")
-            self.embedding_net = nn.DataParallel(self.embedding_net)
-            self.relation_module = nn.DataParallel(self.relation_module)
-
-    def verify_model_setup(self):
-        """Verify model initialization and GPU setup"""
-        try:
-            # Verify embedding network
-            dummy_input = torch.randn(1, 3, 84, 84, device=self.device)
-            with torch.no_grad():
-                out = self.embedding_net(dummy_input)
-                self.logger.info(f"Embedding network output shape: {out.shape}")
-
-                # Verify relation module with proper input shape
-                batch_size = 2
-                n_support = 5
-                dummy_relation_input = torch.randn(batch_size, 128, 10, 10,
-                                                   device=self.device)  # Adjust shape as needed
-                out = self.relation_module(dummy_relation_input)
-                self.logger.info(f"Relation module output shape: {out.shape}")
-
-            self.logger.info("Model verification successful!")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Model verification failed: {str(e)}")
-            raise RuntimeError("Model initialization failed") from e
-
-    def setup_optimizers(self):
-        """Initialize optimizers with memory and performance optimizations"""
-        # Use AdamW with larger batch size and adjusted learning rate
-        self.embedding_optim = optim.AdamW(
-            self.embedding_net.parameters(),
-            lr=self.config['learning_rate'],
-            weight_decay=0.01,
-            eps=1e-4  # Slightly larger epsilon for better numerical stability
-        )
-
-        self.relation_optim = optim.AdamW(
-            self.relation_module.parameters(),
-            lr=self.config['learning_rate'],
-            weight_decay=0.01,
-            eps=1e-4
-        )
-
-        # Gradient scaler for automatic mixed precision
-        self.scaler = torch.amp.GradScaler()
-
-    def setup_data(self):
-        """Initialize datasets and data transforms"""
-        # Data augmentation for training
-        self.train_transform = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(10),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2),
-            transforms.Resize((84, 84)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-
-        # Simpler transform for validation
-        self.val_transform = transforms.Compose([
-            transforms.Resize((84, 84)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-
-        # Initialize datasets
-        self.train_dataset = BinaryImageDataset(
-            self.config['valid_dir'],
-            self.config['invalid_dir'],
-            transform=self.train_transform
-        )
-
-        self.val_dataset = BinaryImageDataset(
-            self.config['valid_dir'],
-            self.config['invalid_dir'],
-            transform=self.val_transform
-        )
-
-    def train_episode(self, support_loader: DataLoader, query_loader: DataLoader) -> Tuple[float, float]:
-        """Optimized training for single episode"""
-        self.embedding_net.train()
-        self.relation_module.train()
-
-        support_features = []
-        support_labels = []
-
-        with torch.autocast('cuda'):
-            # Convert support images to channels_last correctly
-            for images, labels in support_loader:
-                images = images.to(self.device, non_blocking=True)
-                images = images.contiguous(memory_format=torch.channels_last)
-                labels = labels.to(self.device, non_blocking=True)
-                features = self.embedding_net(images)
-                support_features.append(features)
-                support_labels.append(labels)
-
-            support_features = torch.cat(support_features)
-            support_labels = torch.cat(support_labels)
-
-            # Process query set with correct memory format
-            query_features = []
-            query_labels = []
-
-            for images, labels in query_loader:
-                images = images.to(self.device, non_blocking=True)
-                images = images.contiguous(memory_format=torch.channels_last)
-                labels = labels.to(self.device, non_blocking=True)
-                features = self.embedding_net(images)
-                query_features.append(features)
-                query_labels.append(labels)
-
-            query_features = torch.cat(query_features)
-            query_labels = torch.cat(query_labels)
-
-            # Efficient relation computation
-            n_query = query_features.size(0)
-            n_support = support_features.size(0)
-
-            # Use efficient memory layout for large tensors
-            query_features_ext = query_features.unsqueeze(1).expand(-1, n_support, -1, -1, -1)
-            support_features_ext = support_features.unsqueeze(0).expand(n_query, -1, -1, -1, -1)
-
-            # Efficient concatenation and reshape
-            relation_pairs = torch.cat([query_features_ext, support_features_ext], dim=2)
-            relation_pairs = relation_pairs.reshape(-1, *relation_pairs.shape[2:])
-
-            # Compute relations with mixed precision
-            relations = self.relation_module(relation_pairs)
-            relations = relations.view(n_query, n_support)
-
-            weighted_relations = relations * support_labels.float()
-            predictions = weighted_relations.mean(dim=1)
-
-            loss = self.criterion(predictions, query_labels.float())
-
-        # Optimized backward pass
-        self.embedding_optim.zero_grad(set_to_none=True)  # More efficient than zero_grad()
-        self.relation_optim.zero_grad(set_to_none=True)
-
-        self.scaler.scale(loss).backward()
-
-        # Gradient clipping with scaler
-        self.scaler.unscale_(self.embedding_optim)
-        self.scaler.unscale_(self.relation_optim)
-
-        # Use faster gradient clipping
-        torch.nn.utils.clip_grad_norm_(self.embedding_net.parameters(), 1.0)
-        torch.nn.utils.clip_grad_norm_(self.relation_module.parameters(), 1.0)
-
-        self.scaler.step(self.embedding_optim)
-        self.scaler.step(self.relation_optim)
-        self.scaler.update()
-
-        with torch.no_grad():
-            accuracy = ((torch.sigmoid(predictions) >= 0.5).long() == query_labels).float().mean()
-
-        return loss.item(), accuracy.item()
-
-    def _evaluate_episode(self, support_loader: DataLoader, query_loader: DataLoader) -> Tuple[float, list, list]:
-        """Evaluate a single episode"""
-        self.embedding_net.eval()
-        self.relation_module.eval()
-
-        predictions_list = []
-        labels_list = []
-
-        with torch.no_grad():
-            with torch.autocast('cuda'):
-                # Process support set
-                support_features = []
-                support_labels = []
-
-                for images, labels in support_loader:
-                    images = images.to(self.device, non_blocking=True)  # Asynchronous transfer
-                    labels = labels.to(self.device, non_blocking=True)
-                    features = self.embedding_net(images)
-                    support_features.append(features)
-                    support_labels.append(labels)
-
-                support_features = torch.cat(support_features)
-                support_labels = torch.cat(support_labels)
-
-                # Process query set
-                query_features = []
-                query_labels = []
-
-                for images, labels in query_loader:
-                    images = images.to(self.device, non_blocking=True)  # Asynchronous transfer
-                    labels = labels.to(self.device, non_blocking=True)
-                    features = self.embedding_net(images)
-                    query_features.append(features)
-                    query_labels.append(labels)
-
-                query_features = torch.cat(query_features)
-                query_labels = torch.cat(query_labels)
-
-                # Compute relations
-                n_query = query_features.size(0)
-                n_support = support_features.size(0)
-
-                query_features_ext = query_features.unsqueeze(1).expand(-1, n_support, -1, -1, -1)
-                support_features_ext = support_features.unsqueeze(0).expand(n_query, -1, -1, -1, -1)
-
-                relation_pairs = torch.cat([query_features_ext, support_features_ext], dim=2)
-                relation_pairs = relation_pairs.reshape(-1, *relation_pairs.shape[2:])
-
-                relations = self.relation_module(relation_pairs)
-                relations = relations.view(n_query, n_support)
-
-                weighted_relations = relations * support_labels.float()
-                predictions = weighted_relations.mean(dim=1)
-
-                loss = self.criterion(predictions, query_labels.float())
-
-                # Apply sigmoid since we're using BCEWithLogitsLoss
-                predictions = torch.sigmoid(predictions)
-                binary_predictions = (predictions >= 0.5).long()
-
-                predictions_list.extend(binary_predictions.cpu().numpy())
-                labels_list.extend(query_labels.cpu().numpy())
-
-        return loss.item(), predictions_list, labels_list
-
-    def evaluate(self, dataset: Optional[BinaryImageDataset] = None) -> Dict[str, float]:
-        """Evaluate the model"""
-        if dataset is None:
-            dataset = self.val_dataset
-
-        episode_sampler = EpisodeSampler(
-            dataset,
-            self.config['n_shot'],
-            self.config['n_query']
+    criterion = nn.BCEWithLogitsLoss().to(device)
+
+    scaler = GradScaler()
+
+
+def setup_data() -> None:
+    """Initialize datasets and transforms"""
+    global train_transform, val_transform, train_dataset, val_dataset
+
+    train_transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2),
+        transforms.Resize((84, 84)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    val_transform = transforms.Compose([
+        transforms.Resize((84, 84)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    train_dataset = BinaryImageDataset(
+        config['valid_dir'],
+        config['invalid_dir'],
+        transform=train_transform
+    )
+
+    val_dataset = BinaryImageDataset(
+        config['valid_dir'],
+        config['invalid_dir'],
+        transform=val_transform
+    )
+
+
+def train_episode(support_loader: DataLoader, query_loader: DataLoader) -> Tuple[float, float]:
+    """Train a single episode with GPU acceleration"""
+    embedding_net.train()
+    relation_module.train()
+
+    support_features: List[Tensor] = []
+    support_labels: List[Tensor] = []
+
+    with autocast('cuda'):
+        for images, labels in support_loader:
+            if not images.is_cuda:
+                images = images.to(device)
+            if not labels.is_cuda:
+                labels = labels.to(device)
+
+            features = embedding_net(images)
+            support_features.append(features)
+            support_labels.append(labels)
+
+        support_features = torch.cat(support_features)
+        support_labels = torch.cat(support_labels)
+
+        query_features: List[Tensor] = []
+        query_labels: List[Tensor] = []
+
+        for images, labels in query_loader:
+            if not images.is_cuda:
+                images = images.to(device)
+            if not labels.is_cuda:
+                labels = labels.to(device)
+
+            features = embedding_net(images)
+            query_features.append(features)
+            query_labels.append(labels)
+
+        query_features = torch.cat(query_features)
+        query_labels = torch.cat(query_labels)
+
+        n_query = query_features.size(0)
+        n_support = support_features.size(0)
+
+        query_features_ext = query_features.unsqueeze(1).expand(-1, n_support, -1, -1, -1)
+        support_features_ext = support_features.unsqueeze(0).expand(n_query, -1, -1, -1, -1)
+
+        relation_pairs = torch.cat([query_features_ext, support_features_ext], dim=2)
+        relation_pairs = relation_pairs.reshape(-1, *relation_pairs.shape[2:])
+
+        relations = relation_module(relation_pairs)
+        relations = relations.view(n_query, n_support)
+
+        weighted_relations = relations * support_labels.float()
+        predictions = weighted_relations.mean(dim=1)
+
+        loss = criterion(predictions, query_labels.float())
+
+    embedding_optim.zero_grad(set_to_none=True)
+    relation_optim.zero_grad(set_to_none=True)
+
+    scaler.scale(loss).backward()
+
+    scaler.unscale_(embedding_optim)
+    scaler.unscale_(relation_optim)
+
+    torch.nn.utils.clip_grad_norm_(embedding_net.parameters(), 1.0)
+    torch.nn.utils.clip_grad_norm_(relation_module.parameters(), 1.0)
+
+    scaler.step(embedding_optim)
+    scaler.step(relation_optim)
+    scaler.update()
+
+    with torch.no_grad():
+        accuracy = ((torch.sigmoid(predictions) >= 0.5).long() == query_labels).float().mean()
+
+    return loss.item(), accuracy.item()
+
+
+def _evaluate_episode(support_loader: DataLoader, query_loader: DataLoader) -> Tuple[float, List[int], List[int]]:
+    """Evaluate a single episode"""
+    embedding_net.eval()
+    relation_module.eval()
+
+    predictions_list = []
+    labels_list = []
+
+    with torch.no_grad(), autocast('cuda'):
+        support_features: List[Tensor] = []
+        support_labels: List[Tensor] = []
+
+        for images, labels in support_loader:
+            if not images.is_cuda:
+                images = images.to(device)
+            if not labels.is_cuda:
+                labels = labels.to(device)
+
+            features = embedding_net(images)
+            support_features.append(features)
+            support_labels.append(labels)
+
+        support_features = torch.cat(support_features)
+        support_labels = torch.cat(support_labels)
+
+        query_features: List[Tensor] = []
+        query_labels: List[Tensor] = []
+
+        for images, labels in query_loader:
+            if not images.is_cuda:
+                images = images.to(device)
+            if not labels.is_cuda:
+                labels = labels.to(device)
+
+            features = embedding_net(images)
+            query_features.append(features)
+            query_labels.append(labels)
+
+        query_features = torch.cat(query_features)
+        query_labels = torch.cat(query_labels)
+
+        n_query = query_features.size(0)
+        n_support = support_features.size(0)
+
+        query_features_ext = query_features.unsqueeze(1).expand(-1, n_support, -1, -1, -1)
+        support_features_ext = support_features.unsqueeze(0).expand(n_query, -1, -1, -1, -1)
+
+        relation_pairs = torch.cat([query_features_ext, support_features_ext], dim=2)
+        relation_pairs = relation_pairs.reshape(-1, *relation_pairs.shape[2:])
+
+        relations = relation_module(relation_pairs)
+        relations = relations.view(n_query, n_support)
+
+        weighted_relations = relations * support_labels.float()
+        predictions = weighted_relations.mean(dim=1)
+
+        loss = criterion(predictions, query_labels.float())
+
+        predictions = torch.sigmoid(predictions)
+        binary_predictions = (predictions >= 0.5).long()
+
+        predictions_list.extend(binary_predictions.cpu().numpy())
+        labels_list.extend(query_labels.cpu().numpy())
+
+    return loss.item(), predictions_list, labels_list
+
+
+def evaluate(dataset: Optional[BinaryImageDataset] = None) -> Dict[str, float]:
+    """Evaluate the model"""
+    if dataset is None:
+        dataset = val_dataset
+
+    episode_sampler = EpisodeSampler(
+        dataset,
+        config['n_shot'],
+        config['n_query']
+    )
+
+    metrics = {
+        'loss': 0.0,
+        'accuracy': 0.0,
+        'precision': 0.0,
+        'recall': 0.0,
+        'f1': 0.0
+    }
+
+    n_eval_episodes = 10
+    all_predictions: List[int] = []
+    all_labels: List[int] = []
+
+    for _ in range(n_eval_episodes):
+        support_indices, query_indices = episode_sampler.sample_episode()
+
+        support_loader = DataLoader(
+            Subset(dataset, support_indices),
+            batch_size=config['batch_size'],
+            num_workers=config['num_workers'],
+            pin_memory=True,
+            persistent_workers=True
         )
 
-        metrics = {
-            'loss': 0,
-            'accuracy': 0,
-            'precision': 0,
-            'recall': 0,
-            'f1': 0
-        }
+        query_loader = DataLoader(
+            Subset(dataset, query_indices),
+            batch_size=config['batch_size'],
+            num_workers=config['num_workers'],
+            pin_memory=True,
+            persistent_workers=True
+        )
 
-        n_eval_episodes = 10
-        all_predictions = []
-        all_labels = []
+        loss, predictions, labels = _evaluate_episode(support_loader, query_loader)
 
-        for _ in range(n_eval_episodes):
+        metrics['loss'] += loss
+        all_predictions.extend(predictions)
+        all_labels.extend(labels)
+
+    metrics['loss'] /= n_eval_episodes
+    metrics['accuracy'] = sum(p == l for p, l in zip(all_predictions, all_labels)) / len(all_labels)
+    metrics['precision'] = precision_score(all_labels, all_predictions)
+    metrics['recall'] = recall_score(all_labels, all_predictions)
+    metrics['f1'] = f1_score(all_labels, all_predictions)
+
+    return metrics
+
+
+def save_checkpoint(epoch: int, metrics: Dict[str, float], is_best: bool = False) -> None:
+    """Save model checkpoint"""
+    checkpoint_dir = Path('checkpoints')
+    checkpoint_dir.mkdir(exist_ok=True)
+
+    checkpoint = {
+        'epoch': epoch,
+        'embedding_state_dict': embedding_net.state_dict(),
+        'relation_state_dict': relation_module.state_dict(),
+        'embedding_optim_state_dict': embedding_optim.state_dict(),
+        'relation_optim_state_dict': relation_optim.state_dict(),
+        'metrics': metrics,
+        'config': config
+    }
+
+    torch.save(checkpoint, checkpoint_dir / f'checkpoint_epoch_{epoch}.pth')
+
+    if is_best:
+        torch.save(checkpoint, checkpoint_dir / 'best_model.pth')
+        with open(checkpoint_dir / 'best_metrics.json', 'w') as f:
+            json.dump(metrics, f, indent=4)
+
+
+def load_checkpoint(checkpoint_path: str) -> int:
+    """Load model checkpoint"""
+    global embedding_net, relation_module, embedding_optim, relation_optim
+
+    logger.info(f"Loading checkpoint from {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    embedding_net.load_state_dict(checkpoint['embedding_state_dict'])
+    relation_module.load_state_dict(checkpoint['relation_state_dict'])
+    embedding_optim.load_state_dict(checkpoint['embedding_optim_state_dict'])
+    relation_optim.load_state_dict(checkpoint['relation_optim_state_dict'])
+
+    return checkpoint['epoch']
+
+
+def train() -> None:
+    """Main training loop"""
+    global best_val_loss
+
+    episode_sampler = EpisodeSampler(
+        train_dataset,
+        config['n_shot'],
+        config['n_query']
+    )
+
+    early_stopping_counter = 0
+    early_stopping_patience = 10
+
+    logger.info("Starting training...")
+    for epoch in range(config['epochs']):
+        epoch_loss: float = 0.0
+        epoch_accuracy: float = 0.0
+
+        progress_bar = tqdm(range(config['episodes_per_epoch']),
+                            desc=f"Epoch {epoch + 1}")
+
+        for _ in progress_bar:
             support_indices, query_indices = episode_sampler.sample_episode()
 
             support_loader = DataLoader(
-                Subset(dataset, support_indices),
-                batch_size=self.config['batch_size'],
-                num_workers=self.config['num_workers'],
+                Subset(train_dataset, support_indices),
+                batch_size=config['batch_size'],
+                shuffle=True,
+                num_workers=config['num_workers'],
                 pin_memory=True,
-                persistent_workers=True
+                persistent_workers=True,
+                prefetch_factor=config['prefetch_factor']
             )
-
             query_loader = DataLoader(
-                Subset(dataset, query_indices),
-                batch_size=self.config['batch_size'],
-                num_workers=self.config['num_workers'],
+                Subset(train_dataset, query_indices),
+                batch_size=config['batch_size'],
+                shuffle=True,
+                num_workers=config['num_workers'],
                 pin_memory=True,
-                persistent_workers=True
+                persistent_workers=True,
+                prefetch_factor=config['prefetch_factor']
             )
 
-            loss, predictions, labels = self._evaluate_episode(
-                support_loader,
-                query_loader
-            )
+            loss, accuracy = train_episode(support_loader, query_loader)
 
-            metrics['loss'] += loss
-            all_predictions.extend(predictions)
-            all_labels.extend(labels)
+            epoch_loss += loss
+            epoch_accuracy += accuracy
 
-        # Calculate final metrics
-        metrics['loss'] /= n_eval_episodes
-        metrics['accuracy'] = sum(p == l for p, l in zip(all_predictions, all_labels)) / len(all_labels)
-        metrics['precision'] = precision_score(all_labels, all_predictions)
-        metrics['recall'] = recall_score(all_labels, all_predictions)
-        metrics['f1'] = f1_score(all_labels, all_predictions)
+            progress_bar.set_postfix({
+                'loss': f'{loss:.4f}',
+                'acc': f'{accuracy:.4f}'
+            })
 
-        return metrics
+            torch.cuda.synchronize()
 
-    def save_checkpoint(self, epoch: int, metrics: Dict[str, float], is_best: bool = False):
-        """Save model checkpoint"""
-        checkpoint_dir = Path('checkpoints')
-        checkpoint_dir.mkdir(exist_ok=True)
+        epoch_loss /= config['episodes_per_epoch']
+        epoch_accuracy /= config['episodes_per_epoch']
 
-        checkpoint = {
-            'epoch': epoch,
-            'embedding_state_dict': self.embedding_net.state_dict(),
-            'relation_state_dict': self.relation_module.state_dict(),
-            'embedding_optim_state_dict': self.embedding_optim.state_dict(),
-            'relation_optim_state_dict': self.relation_optim.state_dict(),
-            'metrics': metrics,
-            'config': self.config
-        }
+        val_metrics = evaluate()
 
-        # Save regular checkpoint
-        torch.save(checkpoint, checkpoint_dir / f'checkpoint_epoch_{epoch}.pth')
-
-        # Save best model if applicable
-        if is_best:
-            torch.save(checkpoint, checkpoint_dir / 'best_model.pth')
-            # Save best metrics
-            with open(checkpoint_dir / 'best_metrics.json', 'w') as f:
-                json.dump(metrics, f, indent=4)
-
-
-    def load_checkpoint(self, checkpoint_path: str) -> int:
-        """Load model checkpoint"""
-        self.logger.info(f"Loading checkpoint from {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-
-        self.embedding_net.load_state_dict(checkpoint['embedding_state_dict'])
-        self.relation_module.load_state_dict(checkpoint['relation_state_dict'])
-        self.embedding_optim.load_state_dict(checkpoint['embedding_optim_state_dict'])
-        self.relation_optim.load_state_dict(checkpoint['relation_optim_state_dict'])
-
-        return checkpoint['epoch']
-
-    def train(self):
-        """Main training loop"""
-        episode_sampler = EpisodeSampler(
-            self.train_dataset,
-            self.config['n_shot'],
-            self.config['n_query']
+        logger.info(
+            f"Epoch [{epoch + 1}/{config['epochs']}] "
+            f"Train Loss: {epoch_loss:.4f} "
+            f"Train Acc: {epoch_accuracy:.4f} "
+            f"Val Loss: {val_metrics['loss']:.4f} "
+            f"Val Acc: {val_metrics['accuracy']:.4f} "
+            f"Val F1: {val_metrics['f1']:.4f}"
         )
 
-        early_stopping_counter = 0
-        early_stopping_patience = 10
+        if val_metrics['loss'] < best_val_loss:
+            best_val_loss = val_metrics['loss']
+            save_checkpoint(epoch, val_metrics, is_best=True)
+            early_stopping_counter = 0
+            logger.info("New best model saved!")
+        else:
+            early_stopping_counter += 1
 
-        self.logger.info("Starting training...")
-        for epoch in range(self.config['epochs']):
-            epoch_loss = 0
-            epoch_accuracy = 0
+        if (epoch + 1) % config['save_interval'] == 0:
+            save_checkpoint(epoch, val_metrics)
 
-            # Training loop
-            progress_bar = tqdm(range(self.config['episodes_per_epoch']),
-                                desc=f"Epoch {epoch + 1}")
+        if early_stopping_counter >= early_stopping_patience:
+            logger.info("Early stopping triggered!")
+            break
 
-            for _ in progress_bar:
-                # Sample episode
-                support_indices, query_indices = episode_sampler.sample_episode()
+        if (epoch + 1) % 5 == 0:
+            torch.cuda.empty_cache()
 
-                # Create dataloaders
-                support_loader = DataLoader(
-                    Subset(self.train_dataset, support_indices),
-                    batch_size=self.config['batch_size'],
-                    shuffle=True,
-                    num_workers=self.config['num_workers'],
-                    pin_memory=True
-                )
-                query_loader = DataLoader(
-                    Subset(self.train_dataset, query_indices),
-                    batch_size=self.config['batch_size'],
-                    shuffle=True,
-                    num_workers=self.config['num_workers'],
-                    pin_memory=True
-                )
+    logger.info("Training completed!")
 
-                # Train on episode
-                loss, accuracy = self.train_episode(support_loader, query_loader)
+def main() -> None:
+    """Main function to setup and run training"""
+    global config
 
-                epoch_loss += loss
-                epoch_accuracy += accuracy
-
-                # Update progress bar
-                progress_bar.set_postfix({
-                    'loss': f'{loss:.4f}',
-                    'acc': f'{accuracy:.4f}'
-                })
-
-            # Compute epoch metrics
-            epoch_loss /= self.config['episodes_per_epoch']
-            epoch_accuracy /= self.config['episodes_per_epoch']
-
-            # Evaluate on validation set
-            val_metrics = self.evaluate()
-
-            # Log metrics
-            self.logger.info(
-                f"Epoch [{epoch + 1}/{self.config['epochs']}] "
-                f"Train Loss: {epoch_loss:.4f} "
-                f"Train Acc: {epoch_accuracy:.4f} "
-                f"Val Loss: {val_metrics['loss']:.4f} "
-                f"Val Acc: {val_metrics['accuracy']:.4f} "
-                f"Val F1: {val_metrics['f1']:.4f}"
-            )
-
-            # Check if this is the best model
-            if val_metrics['loss'] < self.best_val_loss:
-                self.best_val_loss = val_metrics['loss']
-                self.save_checkpoint(epoch, val_metrics, is_best=True)
-                early_stopping_counter = 0
-                self.logger.info("New best model saved!")
-            else:
-                early_stopping_counter += 1
-
-            # Regular checkpoint saving
-            if (epoch + 1) % self.config['save_interval'] == 0:
-                self.save_checkpoint(epoch, val_metrics)
-
-            # Early stopping
-            if early_stopping_counter >= early_stopping_patience:
-                self.logger.info("Early stopping triggered!")
-                break
-
-            # Learning rate scheduling logging
-            current_lr_embed = self.embedding_optim.param_groups[0]['lr']
-            current_lr_rel = self.relation_optim.param_groups[0]['lr']
-            self.logger.info(f"Current LR - Embedding: {current_lr_embed:.6f}, "
-                             f"Relation: {current_lr_rel:.6f}")
-
-        self.logger.info("Training completed!")
-
-        # Final evaluation on test set if provided
-        if hasattr(self, 'test_dataset'):
-            self.logger.info("Evaluating on test set...")
-            test_metrics = self.evaluate(self.test_dataset)
-            self.logger.info(
-                f"Final Test Metrics:\n"
-                f"Loss: {test_metrics['loss']:.4f}\n"
-                f"Accuracy: {test_metrics['accuracy']:.4f}\n"
-                f"Precision: {test_metrics['precision']:.4f}\n"
-                f"Recall: {test_metrics['recall']:.4f}\n"
-                f"F1 Score: {test_metrics['f1']:.4f}"
-            )
-
-
-def main():
     parser = argparse.ArgumentParser(description='RelationNet Training Script')
 
     # Data parameters
@@ -574,72 +493,61 @@ def main():
                         help='Dropout rate')
 
     # Runtime parameters
-    parser.add_argument('--device', type=str,
-                        default='cuda' if torch.cuda.is_available() else 'cpu',
-                        help='Device to use for training (cuda/cpu)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
     parser.add_argument('--resume', type=str,
                         help='Path to checkpoint to resume training from')
-    parser.add_argument('--debug', action='store_true',
-                        help='Enable debug mode')
-    parser.add_argument('--mixed_precision', type=str, default='fp16',
-                        choices=['fp16', 'bf16', 'fp32'],
-                        help='Mixed precision type')
     parser.add_argument('--prefetch_factor', type=int, default=2,
                         help='Number of batches to prefetch')
-    parser.add_argument('--optimize_memory', action='store_true',
-                        help='Enable additional memory optimizations')
 
     args = parser.parse_args()
 
-    # Set random seed for reproducibility
+    # Set random seeds
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(args.seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    torch.cuda.manual_seed_all(args.seed)
 
-    # Convert args to config dictionary
+    # Ensure CUDA is available
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available. This implementation requires GPU.")
+
+    # Enable CUDA optimizations
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+
+    # Setup config
     config = vars(args)
+    config['device'] = 'cuda'
 
-    # Initialize trainer
-    trainer = RelationNetTrainer(config)
+    # Initialize all components
+    setup_logging()
+    setup_models()
+    setup_optimizers()
+    setup_data()
 
     # Resume from checkpoint if specified
     if args.resume:
-        start_epoch = trainer.load_checkpoint(args.resume)
-        trainer.logger.info(f"Resumed training from epoch {start_epoch}")
+        start_epoch = load_checkpoint(args.resume)
+        logger.info(f"Resumed training from epoch {start_epoch}")
 
-    # Print configuration
-    trainer.logger.info("Configuration:")
-    for key, value in config.items():
-        trainer.logger.info(f"{key}: {value}")
-
-    # Print model architecture
-    trainer.logger.info("\nModel Architecture:")
-    trainer.logger.info("\nEmbedding Network:")
-    trainer.logger.info(trainer.embedding_net)
-    trainer.logger.info("\nRelation Module:")
-    trainer.logger.info(trainer.relation_module)
+    logger.info(f"Initial GPU Memory: {torch.cuda.memory_allocated() / 1e9:.2f}GB")
 
     # Start training
     try:
-        trainer.train()
+        train()
     except KeyboardInterrupt:
-        trainer.logger.info("Training interrupted by user")
+        logger.info("Training interrupted by user")
     except Exception as e:
-        trainer.logger.exception("An error occurred during training")
+        logger.exception("An error occurred during training")
         raise e
     finally:
-        # Save final checkpoint
-        trainer.logger.info("Saving final checkpoint...")
-        trainer.save_checkpoint(
+        logger.info("Saving final checkpoint...")
+        save_checkpoint(
             config['epochs'],
             {'loss': float('inf')},
             is_best=False
         )
+        torch.cuda.empty_cache()
 
 if __name__ == '__main__':
     main()

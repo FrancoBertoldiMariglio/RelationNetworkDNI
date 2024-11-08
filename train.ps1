@@ -19,15 +19,12 @@ python main.py `
     --n_shot 5 `
     --n_query 15 `
     --learning_rate 0.001 `
-    --batch_size 64 `
-    --num_workers 28 `
+    --batch_size 16 `
+    --num_workers 4 `
     --hidden_size 8 `
     --dropout 0.1 `
-    --device cuda `
     --seed 42 `
-    --mixed_precision fp16 `
-    --prefetch_factor 2 `
-    --optimize_memory `
+    --prefetch_factor 1 `
     --save_interval 5 | 
     Tee-Object -FilePath $logfile
 
