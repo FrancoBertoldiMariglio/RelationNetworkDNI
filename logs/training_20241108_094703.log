@@ -1,0 +1,123 @@
+2024-11-08 09:47:03,537 - INFO - 
+=== Device Configuration ===
+2024-11-08 09:47:03,537 - INFO - Selected device: cuda
+2024-11-08 09:47:03,537 - INFO - CUDA available: True
+2024-11-08 09:47:03,537 - INFO - Current CUDA device: 0
+2024-11-08 09:47:03,537 - INFO - Device name: NVIDIA GeForce RTX 4060 Ti
+2024-11-08 09:47:03,537 - INFO - ========================
+
+2024-11-08 09:47:03,537 - INFO - Setting default tensor type to CUDA
+2024-11-08 09:47:03,538 - INFO - Initial GPU Memory Allocated: 0.00 MB
+2024-11-08 09:47:03,538 - INFO - Initial GPU Memory Cached: 0.00 MB
+2024-11-08 09:47:03,694 - INFO - Warming up GPU...
+2024-11-08 09:47:03,999 - INFO - Initial GPU Memory: 0.00GB
+2024-11-08 09:47:04,000 - INFO - 
+=== Model Device Verification ===
+2024-11-08 09:47:04,000 - INFO - Embedding Network device: cuda:0
+2024-11-08 09:47:04,000 - INFO - Relation Module device: cuda:0
+2024-11-08 09:47:04,046 - INFO - Embedding network output shape: torch.Size([1, 64, 9, 9])
+2024-11-08 09:47:04,046 - INFO - Embedding output device: cuda:0
+2024-11-08 09:47:04,182 - INFO - Relation module output shape: torch.Size([2, 1])
+2024-11-08 09:47:04,182 - INFO - Relation output device: cuda:0
+2024-11-08 09:47:04,182 - INFO - ===========================
+
+2024-11-08 09:47:04,187 - INFO - Configuration:
+2024-11-08 09:47:04,187 - INFO - valid_dir: data/train/valid
+2024-11-08 09:47:04,187 - INFO - invalid_dir: data/train/invalid
+2024-11-08 09:47:04,187 - INFO - test_dir_valid: data/test/valid
+2024-11-08 09:47:04,187 - INFO - test_dir_invalid: data/test/invalid
+2024-11-08 09:47:04,187 - INFO - epochs: 100
+2024-11-08 09:47:04,187 - INFO - episodes_per_epoch: 100
+2024-11-08 09:47:04,187 - INFO - n_shot: 5
+2024-11-08 09:47:04,187 - INFO - n_query: 15
+2024-11-08 09:47:04,187 - INFO - learning_rate: 0.001
+2024-11-08 09:47:04,187 - INFO - batch_size: 64
+2024-11-08 09:47:04,187 - INFO - num_workers: 28
+2024-11-08 09:47:04,187 - INFO - save_interval: 5
+2024-11-08 09:47:04,187 - INFO - hidden_size: 8
+2024-11-08 09:47:04,187 - INFO - dropout: 0.1
+2024-11-08 09:47:04,187 - INFO - device: cuda
+2024-11-08 09:47:04,187 - INFO - seed: 42
+2024-11-08 09:47:04,187 - INFO - resume: None
+2024-11-08 09:47:04,187 - INFO - debug: False
+2024-11-08 09:47:04,187 - INFO - mixed_precision: fp16
+2024-11-08 09:47:04,187 - INFO - prefetch_factor: 2
+2024-11-08 09:47:04,187 - INFO - optimize_memory: True
+2024-11-08 09:47:04,187 - INFO - 
+Model Architecture:
+2024-11-08 09:47:04,187 - INFO - 
+Embedding Network:
+2024-11-08 09:47:04,187 - INFO - EmbeddingNet(
+  (encoder): Sequential(
+    (0): ConvBlock(
+      (conv): Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1), bias=False)
+      (norm): GroupNorm(8, 64, eps=1e-05, affine=True)
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+    (1): ConvBlock(
+      (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), bias=False)
+      (norm): GroupNorm(8, 64, eps=1e-05, affine=True)
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+    (2): ConvBlock(
+      (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (norm): GroupNorm(8, 64, eps=1e-05, affine=True)
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+    (3): ConvBlock(
+      (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (norm): GroupNorm(8, 64, eps=1e-05, affine=True)
+      (pool): Identity()
+    )
+  )
+)
+2024-11-08 09:47:04,188 - INFO - 
+Relation Module:
+2024-11-08 09:47:04,188 - INFO - RelationModule(
+  (conv_net): Sequential(
+    (0): ConvBlock(
+      (conv): Conv2d(128, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (norm): GroupNorm(8, 64, eps=1e-05, affine=True)
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+    (1): ConvBlock(
+      (conv): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (norm): GroupNorm(8, 64, eps=1e-05, affine=True)
+      (pool): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    )
+  )
+  (classifier): Sequential(
+    (0): Linear(in_features=256, out_features=8, bias=False)
+    (1): LayerNorm((8,), eps=1e-05, elementwise_affine=True)
+    (2): ReLU(inplace=True)
+    (3): Linear(in_features=8, out_features=1, bias=True)
+  )
+)
+2024-11-08 09:47:04,224 - INFO - Starting training...
+2024-11-08 09:47:04,224 - INFO - GPU Memory at epoch start: 8.99 MB
+2024-11-08 09:47:04,226 - INFO - GPU Memory Before Episode: 8.99 MB
+2024-11-08 09:47:04,226 - INFO - Embedding Net device: cuda:0
+2024-11-08 09:47:04,226 - INFO - Relation Module device: cuda:0
+2024-11-08 09:47:04,234 - ERROR - An error occurred during training
+Traceback (most recent call last):
+  File "C:\Users\patit\Documents\RelationNetworkDNI\main.py", line 737, in main
+    trainer.train()
+  File "C:\Users\patit\Documents\RelationNetworkDNI\main.py", line 395, in train
+    loss, accuracy = self.train_episode(support_loader, query_loader)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\Documents\RelationNetworkDNI\main.py", line 239, in train_episode
+    for i, (images, labels) in enumerate(support_loader):
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\utils\data\dataloader.py", line 479, in __iter__
+    self._iterator = self._get_iterator()
+                     ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\utils\data\dataloader.py", line 415, in _get_iterator
+    return _MultiProcessingDataLoaderIter(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\utils\data\dataloader.py", line 1074, in __init__
+    super().__init__(loader)
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\utils\data\dataloader.py", line 668, in __init__
+    .random_(generator=loader.generator)
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Expected a 'cuda' device type for generator but found 'cpu'
+2024-11-08 09:47:04,235 - INFO - Saving final checkpoint...
