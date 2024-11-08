@@ -150,7 +150,7 @@ class RelationNetTrainer:
         )
 
         # Gradient scaler for automatic mixed precision
-        self.scaler = torch.cuda.amp.GradScaler()
+        self.scaler = torch.amp.GradScaler()
 
     def setup_data(self):
         """Initialize datasets and data transforms"""
@@ -192,7 +192,7 @@ class RelationNetTrainer:
         support_features = []
         support_labels = []
 
-        with torch.cuda.amp.autocast():
+        with torch.autocast('cuda'):
             # Convert support images to channels_last correctly
             for images, labels in support_loader:
                 images = images.to(self.device, non_blocking=True)
@@ -273,7 +273,7 @@ class RelationNetTrainer:
         labels_list = []
 
         with torch.no_grad():
-            with torch.cuda.amp.autocast():
+            with torch.autocast('cuda'):
                 # Process support set
                 support_features = []
                 support_labels = []

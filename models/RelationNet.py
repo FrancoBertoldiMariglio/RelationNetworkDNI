@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 
 
 class ConvBlock(nn.Module):
@@ -36,7 +36,7 @@ class EmbeddingNet(nn.Module):
             ConvBlock(64, 64, padding=1, pool=False)
         )
 
-    @autocast()  # Enable automatic mixed precision
+    @torch.autocast('cuda')  # Enable automatic mixed precision
     def forward(self, x):
         return self.encoder(x)
 
@@ -60,12 +60,11 @@ class RelationModule(nn.Module):
             nn.Linear(hidden_size, 1)
         )
 
-    @autocast()
+    @torch.autocast("cuda")
     def forward(self, x):
         # Add memory-efficient forward pass
-        with torch.cuda.amp.autocast():
-            x = self.conv_net(x)
-            # More efficient flattening for large batches
-            batch_size = x.shape[0]
-            x = x.view(batch_size, -1)
-            return self.classifier(x)
+        x = self.conv_net(x)
+        # More efficient flattening for large batches
+        batch_size = x.shape[0]
+        x = x.view(batch_size, -1)
+        return self.classifier(x)
