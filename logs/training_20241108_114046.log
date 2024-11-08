@@ -1,0 +1,56 @@
+2024-11-08 11:40:54,481 - INFO - Initial GPU Memory: 0.05GB
+2024-11-08 11:40:54,481 - INFO - Starting training...
+2024-11-08 11:41:15,244 - ERROR - An error occurred during training
+Traceback (most recent call last):
+  File "C:\Users\patit\Documents\RelationNetworkDNI\main.py", line 537, in main
+    train()
+  File "C:\Users\patit\Documents\RelationNetworkDNI\main.py", line 409, in train
+    loss, accuracy = train_episode(support_loader, query_loader)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\Documents\RelationNetworkDNI\main.py", line 175, in train_episode
+    relations = relation_module(relation_pairs)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\Documents\RelationNetworkDNI\models\RelationNet.py", line 119, in forward
+    x = self.conv_net(x)
+        ^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\container.py", line 250, in forward
+    input = module(input)
+            ^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\Documents\RelationNetworkDNI\models\RelationNet.py", line 43, in forward
+    return self.pool(x)
+           ^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\modules\pooling.py", line 213, in forward
+    return F.max_pool2d(
+           ^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\_jit_internal.py", line 624, in fn
+    return if_false(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\patit\miniconda3\envs\relationnet\Lib\site-packages\torch\nn\functional.py", line 830, in _max_pool2d
+    return torch.max_pool2d(input, kernel_size, stride, padding, dilation, ceil_mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Given input size: (64x1x1). Calculated output size: (64x0x0). Output size is too small
+2024-11-08 11:41:15,246 - INFO - Saving final checkpoint...
