@@ -402,7 +402,6 @@ def evaluate(dataset: Optional[BinaryImageDataset] = None) -> Dict[str, float]:
             Subset(dataset, support_indices),
             batch_size=config['batch_size'],
             num_workers=config['num_workers'],
-            pin_memory=True,
             persistent_workers=True
         )
 
@@ -410,7 +409,6 @@ def evaluate(dataset: Optional[BinaryImageDataset] = None) -> Dict[str, float]:
             Subset(dataset, query_indices),
             batch_size=config['batch_size'],
             num_workers=config['num_workers'],
-            pin_memory=True,
             persistent_workers=True
         )
 
