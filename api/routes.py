@@ -2,7 +2,7 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import APIRouter, HTTPException, Depends, FastAPI
 import logging
-from api.schemas import PredictionRequest, PredictionResponse
+from api.schemas import PredictionRequest, PredictionResponse, HealthCheckResponse
 from api.service import RelationNetPredictor
 
 logger = logging.getLogger(__name__)
@@ -65,5 +65,53 @@ def create_router() -> APIRouter:
         except Exception as e:
             logger.error(f"Prediction failed: {str(e)}")
             raise HTTPException(status_code=500, detail="Internal server error")
+
+    @router.get("/healthcheck", response_model=HealthCheckResponse)
+    async def healthcheck(predictor: RelationNetPredictor = Depends(get_predictor)) -> HealthCheckResponse:
+        status = "healthy"
+        details = {
+            "predictor": {
+                "status": "healthy",
+                "message": "Model loaded successfully"
+            },
+            "resources": {
+                "status": "healthy",
+                "message": "All resources available"
+            }
+        }
+
+        try:
+            if predictor is None:
+                status = "unhealthy"
+                details["predictor"] = {
+                    "status": "unhealthy",
+                    "message": "Predictor not initialized"
+                }
+
+            if not os.path.exists(CHECKPOINT_PATH):
+                status = "unhealthy"
+                details["resources"]["status"] = "unhealthy"
+                details["resources"]["message"] = f"Model checkpoint not found at {CHECKPOINT_PATH}"
+
+            if not os.path.exists(SUPPORT_FOLDER):
+                status = "unhealthy"
+                details["resources"]["status"] = "unhealthy"
+                details["resources"]["message"] = f"Support folder not found at {SUPPORT_FOLDER}"
+
+
+        except Exception as e:
+            status = "unhealthy"
+            details["predictor"] = {
+                "status": "unhealthy",
+                "message": f"Health check failed: {str(e)}"
+            }
+
+        if status == "unhealthy":
+            raise HTTPException(
+                status_code=503,
+                detail=details
+            )
+
+        return HealthCheckResponse(status=status, details=details)
 
     return router
