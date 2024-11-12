@@ -1,17 +1,15 @@
 # Web framework
-fastapi~=0.115.4
-uvicorn~=0.32.0
-pydantic~=2.9.2
+fastapi==0.95.0
+uvicorn==0.21.1
+pydantic~=1.6.2
 
 # ML/DL frameworks - CPU only versions
---find-links https://download.pytorch.org/whl/cpu
-torch==2.1.0+cpu
-torchvision==0.16.0+cpu
+# torch==2.1.0
+# torchvision==0.16.0
 
 # Image processing
-pillow~=10.4.0
+pillow==9.4.0
 
 # Utilities
 python-dotenv==1.0.0
 python-multipart==0.0.6
-logging==0.4.9.6
